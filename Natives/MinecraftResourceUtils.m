@@ -71,28 +71,35 @@
         NSLog(@"[MCDL] 检测到 -DignoreList= 但未匹配到 bootstrap 库，仍按 Forge/NeoForge 处理");
     }
 
-    NSMutableArray *mutableJvm = [jvm mutableCopy];
-    NSString *updatedArg = mutableJvm[(NSUInteger)ignoreListIndex];
-
-    // iOS 特有：JavaApp/Makefile 在合成 lwjgl-<ver>.jar 时把 launcher 的
-    // com/apple/ios/audio/*.class 一并复制进去，导致 launcher.jar 与 lwjgl.jar
-    // 两个自动模块导出同一个包。Forge/NeoForge 的 bootstrap 走 JPMS
-    // (Configuration.resolveAndBind) 时直接失败：
-    //   java.lang.module.ResolutionException:
-    //   Modules launcher and lwjgl export package com.apple.ios.audio to module brigadier
-    // 把 lwjgl 加入 ignoreList：它仍留在 classpath 上供游戏正常调用，但不再被
-    // 当作模块解析，重复导出消失，模块图得以构建（幂等）。
-    if ([updatedArg rangeOfString:@"lwjgl" options:NSCaseInsensitiveSearch].location == NSNotFound) {
-        updatedArg = [updatedArg stringByAppendingString:@",lwjgl"];
-    } else {
-        return;
+    NSString *originalArg = jvm[(NSUInteger)ignoreListIndex];
+    NSString *prefix = @"-DignoreList=";
+    NSArray<NSString *> *entries = [[originalArg substringFromIndex:prefix.length]
+                                   componentsSeparatedByString:@","];
+    NSMutableArray<NSString *> *keptEntries = [NSMutableArray arrayWithCapacity:entries.count];
+    BOOL removedLWJGL = NO;
+    // HYPOTHESIS ONLY: JavaApp/Makefile already strips duplicate launcher
+    // packages from the bundled LWJGL jars. Let BootstrapLauncher see LWJGL
+    // to investigate NeoForge's missing org.lwjgl.system.Struct. Not device-tested.
+    // Remove only the standalone legacy token; preserve every other entry verbatim.
+    for (NSString *entry in entries) {
+        NSString *token = [entry stringByTrimmingCharactersInSet:
+                           [NSCharacterSet whitespaceAndNewlineCharacterSet]];
+        if ([token caseInsensitiveCompare:@"lwjgl"] == NSOrderedSame) {
+            removedLWJGL = YES;
+        } else {
+            [keptEntries addObject:entry];
+        }
     }
+    if (!removedLWJGL) return;
 
-    mutableJvm[(NSUInteger)ignoreListIndex] = updatedArg;
+    // Keep the property even if empty, so an earlier duplicate cannot take effect.
+    NSMutableArray *mutableJvm = [jvm mutableCopy];
+    mutableJvm[(NSUInteger)ignoreListIndex] = [prefix stringByAppendingString:
+                                             [keptEntries componentsJoinedByString:@","]];
     NSMutableDictionary *mutableArguments = [arguments mutableCopy];
     mutableArguments[@"jvm"] = mutableJvm;
     json[@"arguments"] = mutableArguments;
-    NSLog(@"[MCDL] Forge/NeoForge: 已向 -DignoreList 追加 lwjgl（消除 launcher/lwjgl 重复导出 com.apple.ios.audio 导致的 JPMS ResolutionException）");
+    NSLog(@"[MCDL] HYPOTHESIS (unverified): removed standalone lwjgl from -DignoreList; other JVM arguments preserved");
 }
 
 #pragma mark - OptiFine launchwrapper（参照 ZL2 Install.OptiFine.checkOFLaunchWrapper）
@@ -363,7 +370,7 @@
     client[@"name"] = [NSString stringWithFormat:@"%@.jar", json[@"id"]];
     [json[@"libraries"] addObject:client];
 
-    // Forge/NeoForge：把 lwjgl 追加进 -DignoreList。
+    // Forge/NeoForge hypothesis: remove the legacy standalone lwjgl ignore token.
     // 必须在 jvm_processed 构建之前执行，否则改的是 arguments.jvm 而实际生效的是 jvm_processed。
     [self applyBootstrapLauncherIgnoreListFix:json];
 
