@@ -1,0 +1,7 @@
+--- a/spirv_msl.cpp
++++ b/spirv_msl.cpp
+@@ -4350,0 +4351,4 @@
++		// Packed vertex inputs need the host-format correction used by plain inputs.
++		if (storage == StorageClassInput && get_execution_model() == ExecutionModelVertex)
++			type_id = ensure_correct_input_type(type_id, location, 0, 0, false);
++

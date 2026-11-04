@@ -2,7 +2,7 @@ name: NeoForge patch IPA
 
 on:
   push:
-    branches: [feature/neoforge-lwjgl-5.1.0, feature/controlify-1.21.1-passthrough, diagnostics/iris-zink-vertex-input]
+    branches: [feature/neoforge-lwjgl-5.1.0, feature/controlify-1.21.1-passthrough, diagnostics/iris-zink-vertex-input, fix/zink-packed-vertex-input]
   workflow_dispatch:
 
 permissions:
@@ -31,10 +31,16 @@ jobs:
         run: tests/controller/run.sh
       - name: Install build tools
         run: brew install make ldid
+      - name: Build pinned MoltenVK packed-input backport
+        if: github.ref_name == 'fix/zink-packed-vertex-input'
+        run: |
+          set -o pipefail
+          mkdir -p artifacts
+          scripts/build-moltenvk-packed-inputs.sh 2>&1 | tee artifacts/moltenvk-packed-input-build.log
       - name: Build iOS packages
         env:
           IPHONEOS_DEPLOYMENT_TARGET: '14.0'
-          AMETHYST_SHADER_DIAG_BUILD: ${{ startsWith(github.ref_name, 'diagnostics/') && '1' || '0' }}
+          AMETHYST_SHADER_DIAG_BUILD: ${{ (startsWith(github.ref_name, 'diagnostics/') || github.ref_name == 'fix/zink-packed-vertex-input') && '1' || '0' }}
           CONFIG_CURSEFORGE_API_KEY: ${{ secrets.CONFIG_CURSEFORGE_API_KEY }}
         run: |
           set -o pipefail
@@ -46,7 +52,7 @@ jobs:
       - name: Upload IPA
         uses: actions/upload-artifact@v4
         with:
-          name: Air-5.1.0-${{ startsWith(github.ref_name, 'diagnostics/') && 'Shader-Diagnostics' || 'NeoForge' }}-IPA
+          name: Air-5.1.0-${{ github.ref_name == 'fix/zink-packed-vertex-input' && 'Packed-Input-Fix' || startsWith(github.ref_name, 'diagnostics/') && 'Shader-Diagnostics' || 'NeoForge' }}-IPA
           path: artifacts/com.air-devs.air-*-ios.ipa
           if-no-files-found: error
       - name: Upload TrollStore package
@@ -67,6 +73,7 @@ jobs:
         with:
           name: Air-build-diagnostics
           path: |
+            artifacts/moltenvk-packed-input-*
             mobilegl-build.log
             Natives/build/sfpew_build.log
             artifacts/AngelAuraAmethyst.dSYM

@@ -9,6 +9,7 @@ on:
     branches-ignore:
       - 'l10n_main'
       - 'diagnostics/**'
+      - 'fix/zink-packed-vertex-input'
   workflow_dispatch:
 
 jobs:
