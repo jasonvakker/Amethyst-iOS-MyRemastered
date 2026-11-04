@@ -7,6 +7,17 @@ trap 'rm -rf "$CONTROLLER_TEST_DIR"' EXIT
   JavaApp/src/lwjgl/org/lwjgl/glfw/GamepadBridge.java tests/controller/GamepadBridgeTests.java tests/controller/NativeGamepadProbe.java
 "${BOOTJDK:-/usr/bin}/java" -cp "$CONTROLLER_TEST_DIR" org.lwjgl.glfw.GamepadBridgeTests
 if [ "$(uname -s)" = Darwin ]; then
+  python3 - "$CONTROLLER_TEST_DIR" <<'PYTEST'
+from pathlib import Path
+import sys
+source = Path('Natives/ProfileSettingsViewController.m').read_text()
+start = source.index('- (void)saveControllerMode {')
+end = source.index('\n- (void)showControllerModeSelector', start)
+(Path(sys.argv[1]) / 'ProfileControllerModeProduction.m').write_text(source[start:end])
+PYTEST
+  clang -fobjc-arc -framework Foundation -I "$CONTROLLER_TEST_DIR" \
+    tests/controller/ProfileModeTests.m -o "$CONTROLLER_TEST_DIR/profile-mode-tests"
+  "$CONTROLLER_TEST_DIR/profile-mode-tests"
   # Replace only UIKit imports, keeping the actual ControllerInput method bodies.
   sed '/^#import/d' Natives/input/ControllerInput.m > "$CONTROLLER_TEST_DIR/ControllerInputProduction.m"
   clang -fobjc-arc -framework Foundation -framework GameController -framework QuartzCore -framework CoreGraphics \

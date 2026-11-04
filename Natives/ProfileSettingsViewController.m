@@ -2104,6 +2104,16 @@ static NSString * localizeProfileTitle(NSString *title) {
     [self presentViewController:alert animated:YES completion:nil];
 }
 
+- (void)saveControllerMode {
+    // A mode change must not materialize inherited renderer/JVM/memory defaults.
+    self.profile[@"controllerMode"] = self.selectedControllerMode;
+    NSMutableDictionary *saved = [PLProfiles.current.profiles[self.originalName] mutableCopy];
+    if (saved) {
+        saved[@"controllerMode"] = self.selectedControllerMode;
+        [PLProfiles.current saveProfile:saved withName:self.originalName];
+    }
+}
+
 - (void)showControllerModeSelector {
     UIAlertController *alert = [UIAlertController alertControllerWithTitle:localize(@"controller.mode.title", nil)
         message:localize(@"controller.mode.description", nil) preferredStyle:UIAlertControllerStyleAlert];
@@ -2111,7 +2121,7 @@ static NSString * localizeProfileTitle(NSString *title) {
         NSString *key = [mode isEqualToString:@"controlify"] ? @"controller.mode.controlify" : @"controller.mode.native";
         [alert addAction:[UIAlertAction actionWithTitle:localize(key, nil) style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
             self.selectedControllerMode = mode;
-            [self saveSettings];
+            [self saveControllerMode];
             [self reloadAllTableViews];
         }]];
     }
