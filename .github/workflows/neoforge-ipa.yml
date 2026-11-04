@@ -2,7 +2,7 @@ name: NeoForge patch IPA
 
 on:
   push:
-    branches: [feature/neoforge-lwjgl-5.1.0]
+    branches: [feature/neoforge-lwjgl-5.1.0, feature/controlify-1.21.1-passthrough]
   workflow_dispatch:
 
 permissions:
@@ -25,6 +25,8 @@ jobs:
         with:
           distribution: zulu
           java-version: '8'
+      - name: Test analog controller bridge
+        run: tests/controller/run.sh
       - name: Install build tools
         run: brew install make ldid
       - name: Build iOS packages
