@@ -92,10 +92,14 @@
     }
     if (!removedLWJGL) return;
 
-    // Keep the property even if empty, so an earlier duplicate cannot take effect.
+    // Keep the last property so an earlier duplicate cannot take effect.
+    // BootstrapLauncher uses ignoreList.split(",") and filename.startsWith(filter).
+    // An empty value yields one empty prefix and ignores EVERY jar. A comma
+    // yields zero filters (Java drops trailing empty entries), allowing all jars.
+    NSString *updatedList = [keptEntries componentsJoinedByString:@","];
+    if (updatedList.length == 0) updatedList = @",";
     NSMutableArray *mutableJvm = [jvm mutableCopy];
-    mutableJvm[(NSUInteger)ignoreListIndex] = [prefix stringByAppendingString:
-                                             [keptEntries componentsJoinedByString:@","]];
+    mutableJvm[(NSUInteger)ignoreListIndex] = [prefix stringByAppendingString:updatedList];
     NSMutableDictionary *mutableArguments = [arguments mutableCopy];
     mutableArguments[@"jvm"] = mutableJvm;
     json[@"arguments"] = mutableArguments;
