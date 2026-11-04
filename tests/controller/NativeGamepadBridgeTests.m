@@ -36,6 +36,11 @@ int main(void) {
         assert(fabsf(snapshots[0].axes[3] - 0.8f) < 0.0001f);
         assert(fabsf(snapshots[0].axes[4] + 0.5f) < 0.0001f);
         assert(fabsf(snapshots[0].axes[5] - 0.5f) < 0.0001f);
+        [g.leftTrigger setValue:1]; [g.rightTrigger setValue:0];
+        [NativeGamepadBridge refreshWithControllers:@[controller]];
+        assert(snapshots[0].axes[4] == 1 && snapshots[0].axes[5] == -1);
+        [g.leftTrigger setValue:0.25f]; [g.rightTrigger setValue:0.75f];
+        [NativeGamepadBridge refreshWithControllers:@[controller]];
         uint32_t first = snapshots[0].generation;
         for (int b = 0; b < 11; b++) {
             if (!buttons[b]) continue; // Optional home/options may be absent on this model.

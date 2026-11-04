@@ -7,6 +7,11 @@ trap 'rm -rf "$CONTROLLER_TEST_DIR"' EXIT
   JavaApp/src/lwjgl/org/lwjgl/glfw/GamepadBridge.java tests/controller/GamepadBridgeTests.java tests/controller/NativeGamepadProbe.java
 "${BOOTJDK:-/usr/bin}/java" -cp "$CONTROLLER_TEST_DIR" org.lwjgl.glfw.GamepadBridgeTests
 if [ "$(uname -s)" = Darwin ]; then
+  # Replace only UIKit imports, keeping the actual ControllerInput method bodies.
+  sed '/^#import/d' Natives/input/ControllerInput.m > "$CONTROLLER_TEST_DIR/ControllerInputProduction.m"
+  clang -fobjc-arc -framework Foundation -framework GameController -framework QuartzCore -framework CoreGraphics \
+    -I "$CONTROLLER_TEST_DIR" -I Natives/input tests/controller/ControllerInputTests.m -o "$CONTROLLER_TEST_DIR/controller-input-tests"
+  "$CONTROLLER_TEST_DIR/controller-input-tests"
   clang -fobjc-arc -Wno-incomplete-implementation -framework Foundation -framework GameController -framework QuartzCore \
     tests/controller/NativeGamepadBridgeTests.m -o "$CONTROLLER_TEST_DIR/native-gamepad-tests"
   "$CONTROLLER_TEST_DIR/native-gamepad-tests"
