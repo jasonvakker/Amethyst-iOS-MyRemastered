@@ -1,8 +1,11 @@
 #import <GameController/GameController.h>
-#import <UIKit/UIKit.h>
 
 @interface ControllerInput : NSObject
 
++ (BOOL)isPassthrough;
++ (void)setPassthrough:(BOOL)enabled;
++ (void)releaseAllInputs;
++ (void)shutdown;
 + (void)initKeycodeTable;
 + (void)registerControllerCallbacks:(GCController *)controller;
 + (void)unregisterControllerCallbacks:(GCController *)controller;

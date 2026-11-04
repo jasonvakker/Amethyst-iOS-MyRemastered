@@ -1,4 +1,6 @@
 #import "ControllerInput.h"
+#import "NativeGamepadBridge.h"
+#include <stdatomic.h>
 #import "../LauncherPreferences.h"
 #import "../PLProfiles.h"
 #import "../SurfaceViewController.h"
@@ -25,6 +27,58 @@ CGFloat lastYValue; // lastVerticalValue
 
 NSMutableDictionary *gameMap, *menuMap;
 BOOL leftShiftHeld;
+static atomic_bool controllerPassthrough;
+static NSMutableSet<NSNumber *> *heldKeys, *heldMouseButtons;
+static NSHashTable<GCController *> *registeredControllers;
+static char lastLThumbDirection = -2;
+
++ (BOOL)isPassthrough { return atomic_load(&controllerPassthrough); }
+
++ (void)emitKey:(int)key pressed:(BOOL)pressed {
+    if (!heldKeys) heldKeys = [NSMutableSet set];
+    if (pressed) [heldKeys addObject:@(key)]; else [heldKeys removeObject:@(key)];
+    CallbackBridge_nativeSendKey(key, 0, pressed, 0);
+}
+
++ (void)emitMouse:(int)button pressed:(BOOL)pressed {
+    if (!heldMouseButtons) heldMouseButtons = [NSMutableSet set];
+    if (pressed) [heldMouseButtons addObject:@(button)]; else [heldMouseButtons removeObject:@(button)];
+    CallbackBridge_nativeSendMouseButton(button, pressed, 0);
+}
+
++ (void)releaseAllInputs {
+    for (NSNumber *key in heldKeys) CallbackBridge_nativeSendKey(key.intValue, 0, 0, 0);
+    for (NSNumber *button in heldMouseButtons) CallbackBridge_nativeSendMouseButton(button.intValue, 0, 0);
+    [heldKeys removeAllObjects];
+    [heldMouseButtons removeAllObjects];
+    lastXValue = lastYValue = lastFrameTime = 0;
+    lastLThumbDirection = -2;
+    leftShiftHeld = NO;
+}
+
++ (void)setPassthrough:(BOOL)enabled {
+    NSAssert(NSThread.isMainThread, @"Controller mode changes must run on main");
+    if ([self isPassthrough] == enabled) return;
+    // Remove our old blocks before changing ownership; no stale key/button can survive.
+    for (GCController *controller in GCController.controllers) [self unregisterControllerCallbacks:controller];
+    [self releaseAllInputs];
+    atomic_store(&controllerPassthrough, enabled);
+    if (!enabled) {
+        [self initKeycodeTable];
+        for (GCController *controller in GCController.controllers) [self registerControllerCallbacks:controller];
+    }
+    [NativeGamepadBridge refresh];
+#ifndef NDEBUG
+    NSLog(@"[ControllerBridge] mode=%@ backend=GLFW/GameController", enabled ? @"Controller Mod Passthrough (Controlify)" : @"Air Native Controls");
+#endif
+}
+
++ (void)shutdown {
+    for (GCController *controller in GCController.controllers) [self unregisterControllerCallbacks:controller];
+    [self releaseAllInputs];
+    [NativeGamepadBridge reset];
+    gameMap = menuMap = nil;
+}
 
 + (void)initKeycodeTable {
     if (gameMap && menuMap) {
@@ -40,7 +94,8 @@ BOOL leftShiftHeld;
 }
 
 + (void)sendKeyEvent:(int)controllerKeycode pressed:(BOOL)pressed {
-    int keycode;
+    if ([self isPassthrough]) return;
+    int keycode = GLFW_KEY_UNKNOWN;
     __block NSMutableDictionary *mapping;
     if (isGrabbing) {
         mapping = gameMap;
@@ -61,17 +116,17 @@ BOOL leftShiftHeld;
         case -GLFW_KEY_LEFT_SHIFT:
             if (!pressed) {
                 leftShiftHeld = !leftShiftHeld;
-                CallbackBridge_nativeSendKey(GLFW_KEY_LEFT_SHIFT, 0, leftShiftHeld, 0);
+                [self emitKey:GLFW_KEY_LEFT_SHIFT pressed:leftShiftHeld];
             }
             break;
         case SPECIALBTN_MOUSEPRI:
-            CallbackBridge_nativeSendMouseButton(GLFW_MOUSE_BUTTON_LEFT, pressed, 0);
+            [self emitMouse:GLFW_MOUSE_BUTTON_LEFT pressed:pressed];
             break;
         case SPECIALBTN_MOUSEMID:
-            CallbackBridge_nativeSendMouseButton(GLFW_MOUSE_BUTTON_MIDDLE, pressed, 0);
+            [self emitMouse:GLFW_MOUSE_BUTTON_MIDDLE pressed:pressed];
             break;
         case SPECIALBTN_MOUSESEC:
-            CallbackBridge_nativeSendMouseButton(GLFW_MOUSE_BUTTON_RIGHT, pressed, 0);
+            [self emitMouse:GLFW_MOUSE_BUTTON_RIGHT pressed:pressed];
             break;
         case SPECIALBTN_SCROLLUP:
             CallbackBridge_nativeSendScroll(0, pressed ? 1 : 0);
@@ -83,12 +138,16 @@ BOOL leftShiftHeld;
             if (keycode == GLFW_KEY_LEFT_SHIFT) {
                 leftShiftHeld = pressed;
             }
-            CallbackBridge_nativeSendKey(keycode, 0, pressed, 0);
+            [self emitKey:keycode pressed:pressed];
             break;
     }
 }
 
 + (void)registerControllerCallbacks:(GCController *)controller {
+    if ([self isPassthrough]) return;
+    if (!registeredControllers) registeredControllers = [NSHashTable weakObjectsHashTable];
+    [registeredControllers addObject:controller];
+    controller.handlerQueue = dispatch_get_main_queue();
     GCExtendedGamepad *gamepad = controller.extendedGamepad;
 
     gamepad.leftShoulder.pressedChangedHandler = ^(GCControllerButtonInput *button, float value, BOOL pressed) {
@@ -141,6 +200,7 @@ BOOL leftShiftHeld;
     };
 
     gamepad.leftThumbstick.valueChangedHandler = ^(GCControllerDirectionPad * _Nonnull dpad, float xValue, float yValue) {
+        if ([self isPassthrough]) return;
         if (!isGrabbing) {
             // Update virtual mouse position
             lastXValue = xValue;
@@ -148,7 +208,6 @@ BOOL leftShiftHeld;
             return;
         }
 
-        static char lastLThumbDirection = -2;
         char direction = -1;
         // 同 ControlJoystick：测"偏离中心"用或而非与。手柄更常见——GCController
         // 在死区内把轴直接 snap 到 0，前推带轻微侧漂也会被误判为静止。
@@ -164,23 +223,24 @@ BOOL leftShiftHeld;
         }
 
         // Update WASD states
-        CallbackBridge_nativeSendKey(GLFW_KEY_W, 0,
+        [self emitKey:GLFW_KEY_W pressed:
             direction >= DIRECTION_NORTH_EAST &&
-            direction <= DIRECTION_NORTH_WEST, 0);
-        CallbackBridge_nativeSendKey(GLFW_KEY_A, 0,
+            direction <= DIRECTION_NORTH_WEST];
+        [self emitKey:GLFW_KEY_A pressed:
             direction >= DIRECTION_NORTH_WEST &&
-            direction <= DIRECTION_SOUTH_WEST, 0);
-        CallbackBridge_nativeSendKey(GLFW_KEY_S, 0,
+            direction <= DIRECTION_SOUTH_WEST];
+        [self emitKey:GLFW_KEY_S pressed:
             direction >= DIRECTION_SOUTH_WEST &&
-            direction <= DIRECTION_SOUTH_EAST, 0);
-        CallbackBridge_nativeSendKey(GLFW_KEY_D, 0,
+            direction <= DIRECTION_SOUTH_EAST];
+        [self emitKey:GLFW_KEY_D pressed:
             direction == DIRECTION_SOUTH_EAST ||
             direction == DIRECTION_EAST ||
-            direction == DIRECTION_NORTH_EAST, 0);
+            direction == DIRECTION_NORTH_EAST];
 
         lastLThumbDirection = direction;
     };
     gamepad.rightThumbstick.valueChangedHandler = ^(GCControllerDirectionPad * _Nonnull dpad, float xValue, float yValue) {
+        if ([self isPassthrough]) return;
         if (isGrabbing) {
             lastXValue = xValue;
             lastYValue = yValue;
@@ -198,6 +258,8 @@ BOOL leftShiftHeld;
  * Send the new mouse position, computing the delta
  */
 + (void)tick {
+    [NativeGamepadBridge refresh];
+    if ([self isPassthrough]) return;
     // There isn't a convenient way to get ns, use ms at this point
     CGFloat frameTime = CACurrentMediaTime();
     // GameController automatically performs deadzone calculations
@@ -222,6 +284,8 @@ BOOL leftShiftHeld;
 }
 
 + (void)unregisterControllerCallbacks:(GCController *)controller {
+    if (![registeredControllers containsObject:controller]) return;
+    [registeredControllers removeObject:controller];
     GCExtendedGamepad *gamepad = controller.extendedGamepad;
     gamepad.leftShoulder.pressedChangedHandler = nil;
     gamepad.rightShoulder.pressedChangedHandler = nil;

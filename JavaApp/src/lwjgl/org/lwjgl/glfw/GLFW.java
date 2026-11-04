@@ -30,8 +30,7 @@ import sun.misc.Unsafe;
 
 public class GLFW
 {
-    static FloatBuffer joystickData = (FloatBuffer)FloatBuffer.allocate(8).flip();
-    static ByteBuffer buttonData = (ByteBuffer)ByteBuffer.allocate(8).flip();
+    private static final GamepadBridge gamepads = new GamepadBridge();
     /** The major version number of the GLFW library. This is incremented when the API is changed in non-compatible ways. */
     public static final int GLFW_VERSION_MAJOR = 3;
 
@@ -688,6 +687,16 @@ public class GLFW
         GLFWJoystickCallback lastCallback = mGLFWJoystickCallback;
         if (cbfun == null) mGLFWJoystickCallback = null;
         else mGLFWJoystickCallback = GLFWJoystickCallback.create(cbfun);
+        if (cbfun != null && Boolean.getBoolean("air.controller.debug")) {
+            for (StackTraceElement frame : Thread.currentThread().getStackTrace()) {
+                if (frame.getClassName().startsWith("dev.isxander.controlify.")) {
+                    System.out.println("[ControllerBridge] Controlify backend=GLFW (joystick callback registered)");
+                    break;
+                }
+            }
+        }
+        gamepads.setListener(cbfun == null ? null : (jid, connected) ->
+            cbfun.invoke(jid, connected ? GLFW_CONNECTED : GLFW_DISCONNECTED));
 
         return lastCallback;
     }
@@ -799,6 +808,8 @@ public class GLFW
     }
 
     public static void glfwTerminate() {
+        gamepads.reset();
+        mGLFWJoystickCallback = null;
         long __functionAddress = Functions.Terminate;
         invokeV(__functionAddress);
     }
@@ -1120,6 +1131,7 @@ public class GLFW
     public static void glfwSetWindowIcon(@NativeType("GLFWwindow *") long window, @Nullable @NativeType("GLFWimage const *") GLFWImage.Buffer images) {}
 
     public static void glfwPollEvents() {
+        gamepads.poll();
         if (mGLFWWindowMap.isEmpty()) {
             // MC 26.x creates an SDL3 window, not a GLFW window, so
             // mGLFWWindowMap is empty.  We must still pump the input
@@ -1250,50 +1262,48 @@ public class GLFW
     }
 
     public static boolean glfwJoystickPresent(int jid) {
-        if(jid == 0) {
-            return true;
-        }else return false;
+        gamepads.refresh();
+        return gamepads.present(jid);
     }
     public static String glfwGetJoystickName(int jid) {
-        if(jid == 0) {
-            return "AIC event bus controller";
-        }else return null;
+        gamepads.refresh();
+        return gamepads.name(jid);
     }
     public static FloatBuffer glfwGetJoystickAxes(int jid) {
-        if(jid == 0) {
-            return joystickData;
-        }else return null;
+        gamepads.refresh();
+        return gamepads.axes(jid);
     }
     public static ByteBuffer glfwGetJoystickButtons(int jid) {
-        if(jid == 0) {
-            return buttonData;
-        }else return null;
+        gamepads.refresh();
+        return gamepads.buttons(jid);
     }
-    public static ByteBuffer glfwGetjoystickHats(int jid) {
-        return null;
+    public static ByteBuffer glfwGetJoystickHats(int jid) {
+        gamepads.refresh();
+        return gamepads.hats(jid);
     }
-    public static boolean glfwJoystickIsGamepad(int jid) {
-        if(jid == 0) return true;
-        else return false;
-    }
+    // Retain the historical misspelling for binary compatibility.
+    public static ByteBuffer glfwGetjoystickHats(int jid) { return glfwGetJoystickHats(jid); }
+    public static boolean glfwJoystickIsGamepad(int jid) { return glfwJoystickPresent(jid); }
     public static String glfwGetJoystickGUID(int jid) {
-        if(jid == 0) return "aio0";
-        else return null;
+        gamepads.refresh();
+        return gamepads.guid(jid);
     }
-    public static long glfwGetJoystickUserPointer(int jid) {
-        return 0;
-    }
-    public static void glfwSetJoystickUserPointer(int jid, long pointer) {
-
-    }
+    public static long glfwGetJoystickUserPointer(int jid) { return gamepads.userPointer(jid); }
+    public static void glfwSetJoystickUserPointer(int jid, long pointer) { gamepads.userPointer(jid, pointer); }
     public static boolean glfwUpdateGamepadMappings(ByteBuffer string) {
-        return false;
+        // GameController already supplies the standard semantic layout, independent of SDL mappings.
+        return true;
     }
-    public static String glfwGetGamepadName(int jid) {
-        return "Unknown";
-    }
+    public static boolean glfwUpdateGamepadMappings(CharSequence string) { return true; }
+    public static String glfwGetGamepadName(int jid) { return glfwGetJoystickName(jid); }
     public static boolean glfwGetGamepadState(int jid, GLFWGamepadState state) {
-        return false;
+        synchronized (gamepads) {
+            gamepads.refresh();
+            if (!gamepads.present(jid)) return false;
+            for (int a = 0; a < 6; a++) state.axes(a, gamepads.axis(jid, a));
+            for (int b = 0; b < 15; b++) state.buttons(b, gamepads.button(jid, b));
+            return true;
+        }
     }
 
     /** Array version of: {@link #glfwGetVersion GetVersion} */

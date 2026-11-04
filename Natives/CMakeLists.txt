@@ -326,6 +326,7 @@ add_executable(AngelAuraAmethyst
 	installer/modpack/CurseForgeAPI.m
 
   input/ControllerInput.m
+  input/NativeGamepadBridge.m
   input/GyroInput.m
   input/KeyboardInput.m
 
