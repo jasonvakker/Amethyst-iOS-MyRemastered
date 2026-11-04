@@ -57,6 +57,7 @@ static PLProfiles* current;
         // LWJGL 版本："auto" = MC 26.x 及以上用 3.4.1，其余用 3.3.3。
         // profile 里显式存 "333"/"341" 时以显式值为准。
         @"lwjglVersion": @"auto",
+        @"controllerMode": @"native",
         @"gameDir": @"."
     };
     if (valueDefaults[key]) {

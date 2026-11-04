@@ -1942,6 +1942,27 @@ int launchJVM(NSString *accountId, id launchTarget, int width, int height, int m
     NSLog(@"[JavaLauncher] Using LWJGL %@ (mcVersion=%@)", lwjglVersion, mcVersionId);
     PUSH_MARGV_FORMAT(@"-Dpojav.lwjgl.version=%@", lwjglVersion);
 
+    NSString *controllerMode = [PLProfiles resolveKeyForCurrentProfile:@"controllerMode"];
+    NSString *controllerVersion = [NSString stringWithFormat:@"%@ %@", mcVersionId,
+        [launchTarget isKindOfClass:NSDictionary.class] ? launchTarget[@"inheritsFrom"] : @""];
+    BOOL is1211 = [controllerVersion rangeOfString:@"(?<![0-9])1\\.21\\.1(?![0-9])"
+        options:NSRegularExpressionSearch].location != NSNotFound;
+    if (is1211 || [controllerMode isEqualToString:@"controlify"]) {
+        // Controlify 2.5.2 and 3.0.1 LTS support a native-path override, then fall back
+        // to GLFW on load failure. An impossible path selects that existing fallback
+        // before JNA can load the renderer's SDL or a macOS (non-iOS) native.
+        // Apply also in native mode on 1.21.1 so the in-game mode switch is immediate.
+        PUSH_MARGV_LITERAL("-Dcontrolify.debug.sdl_natives_override=/dev/null/air-glfw-controller-backend");
+#ifndef NDEBUG
+        PUSH_MARGV_LITERAL("-Dair.controller.debug=true");
+        PUSH_MARGV_LITERAL("-Dcontrolify.debug.logging=true");
+        PUSH_MARGV_LITERAL("-Dcontrolify.debug.print_vid_pid=true");
+        NSLog(@"[ControllerBridge] mode=%@ Controlify backend=GLFW; SDL native loading intentionally bypassed", controllerMode);
+#endif
+    }
+    // Backport Taylen27 6542ff2's accelerometer hint before any mod initializes SDL.
+    setenv("SDL_ACCELEROMETER_AS_JOYSTICK", "0", 1);
+
     // 符号隔离（26.3 + mobileglues 崩溃）：在 JVM 启动前预载渲染器
     //
     // 崩溃现场固定为 libshaderc.dylib +0x155820，

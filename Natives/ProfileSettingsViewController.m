@@ -22,6 +22,7 @@
 
 @property (nonatomic, strong) NSArray<NSArray *> *sections;
 @property (nonatomic, strong) NSString *selectedRenderer;
+@property (nonatomic, copy) NSString *selectedControllerMode;
 @property (nonatomic, strong) NSString *selectedGraphicsApi;  // MC 26.2+ 图形 API: default/prefer_vulkan/prefer_opengl
 @property (nonatomic, strong) NSString *selectedJavaVersion;
 @property (nonatomic, assign) NSInteger allocatedMemory;
@@ -469,6 +470,7 @@ static NSString * localizeProfileTitle(NSString *title) {
 #pragma mark - Load Settings
 
 - (void)loadSettings {
+    self.selectedControllerMode = [PLProfiles profile:self.profile resolveKey:@"controllerMode"];
     // 渲染器
     self.selectedRenderer = self.profile[@"renderer"] ?: @"auto";
 
@@ -516,7 +518,7 @@ static NSString * localizeProfileTitle(NSString *title) {
     if ([self isCurrentProfileModernVersion]) {
         [advancedRows addObject:@"图形 API"];
     }
-    [advancedRows addObjectsFromArray:@[@"Java版本", @"内存分配", @"JVM 启动参数", @"清除JVM参数"]];
+    [advancedRows addObjectsFromArray:@[@"controller.mode.title", @"Java版本", @"内存分配", @"JVM 启动参数", @"清除JVM参数"]];
 
     // 重构（Air-Design v1.2）：5 个 Bento 分组
     // 顺序与横屏布局对应：左侧（0,1）+ 右侧（2,3,4）
@@ -616,6 +618,7 @@ static NSString * localizeProfileTitle(NSString *title) {
     if (!existing) {
         existing = [NSMutableDictionary dictionary];
     }
+    existing[@"controllerMode"] = self.selectedControllerMode;
     existing[@"renderer"] = self.selectedRenderer;
     existing[@"graphicsApi"] = self.selectedGraphicsApi;
     existing[@"javaVersion"] = self.selectedJavaVersion;
@@ -766,6 +769,10 @@ static NSString * localizeProfileTitle(NSString *title) {
                 cell.imageView.image = [UIImage systemImageNamed:@"rectangle.dashed"];
                 cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
                 cell.detailTextLabel.text = [self graphicsApiDisplayName:self.selectedGraphicsApi];
+            } else if ([title isEqualToString:@"controller.mode.title"]) {
+                cell.imageView.image = [UIImage systemImageNamed:@"gamecontroller"];
+                cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
+                cell.detailTextLabel.text = localize([self.selectedControllerMode isEqualToString:@"controlify"] ? @"controller.mode.controlify" : @"controller.mode.native", nil);
             } else if ([title isEqualToString:@"Java版本"]) {
                 cell.imageView.image = [UIImage systemImageNamed:@"j.square"];
                 cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
@@ -1159,6 +1166,8 @@ static NSString * localizeProfileTitle(NSString *title) {
                 [self showRendererSelector];
             } else if ([title isEqualToString:@"图形 API"]) {
                 [self showGraphicsApiSelector];
+            } else if ([title isEqualToString:@"controller.mode.title"]) {
+                [self showControllerModeSelector];
             } else if ([title isEqualToString:@"Java版本"]) {
                 [self showJavaVersionSelector];
             } else if ([title isEqualToString:@"内存分配"]) {
@@ -2092,6 +2101,21 @@ static NSString * localizeProfileTitle(NSString *title) {
         alert.popoverPresentationController.sourceRect = cell ? cell.bounds : self.view.bounds;
     }
 
+    [self presentViewController:alert animated:YES completion:nil];
+}
+
+- (void)showControllerModeSelector {
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:localize(@"controller.mode.title", nil)
+        message:localize(@"controller.mode.description", nil) preferredStyle:UIAlertControllerStyleAlert];
+    for (NSString *mode in @[@"native", @"controlify"]) {
+        NSString *key = [mode isEqualToString:@"controlify"] ? @"controller.mode.controlify" : @"controller.mode.native";
+        [alert addAction:[UIAlertAction actionWithTitle:localize(key, nil) style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+            self.selectedControllerMode = mode;
+            [self saveSettings];
+            [self reloadAllTableViews];
+        }]];
+    }
+    [alert addAction:[UIAlertAction actionWithTitle:localize(@"resman.common.cancel", nil) style:UIAlertActionStyleCancel handler:nil]];
     [self presentViewController:alert animated:YES completion:nil];
 }
 

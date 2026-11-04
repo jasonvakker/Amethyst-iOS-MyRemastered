@@ -8,6 +8,7 @@
 #import "customcontrols/CustomControlsUtils.h"
 
 #import "input/ControllerInput.h"
+#import "input/NativeGamepadBridge.h"
 #import "input/GyroInput.h"
 #import "input/KeyboardInput.h"
 
@@ -1085,7 +1086,8 @@ static UIView *findSDL_uikitview(UIView *root);
     self.moveViewPanGesture.delaysTouchesEnded = NO;
     [self.touchView addGestureRecognizer:self.moveViewPanGesture];
 
-    virtualMouseEnabled = getPrefBool(@"control.virtmouse_enable");
+    [ControllerInput setPassthrough:[[PLProfiles resolveKeyForCurrentProfile:@"controllerMode"] isEqualToString:@"controlify"]];
+    virtualMouseEnabled = ![ControllerInput isPassthrough] && getPrefBool(@"control.virtmouse_enable");
     virtualMouseFrame = CGRectMake(self.view.frame.size.width / 2, self.view.frame.size.height / 2, 18, 27);
     self.mousePointerView = [[UIImageView alloc] initWithFrame:virtualMouseFrame];
     self.mousePointerView.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin | UIViewAutoresizingFlexibleTopMargin | UIViewAutoresizingFlexibleRightMargin |UIViewAutoresizingFlexibleBottomMargin;
@@ -1096,7 +1098,10 @@ static UIView *findSDL_uikitview(UIView *root);
 
     // 关键修复（UI 累积异常）：将块观察者存为属性，dealloc 中移除。
     // 之前返回值未存储，导致每次新建 SurfaceViewController 都泄漏一个观察者 + 强引用 self。
+    __weak typeof(self) weakInputSelf = self;
     self.mousePointerUpdatedCallback = [[NSNotificationCenter defaultCenter] addObserverForName:@"MousePointerUpdated" object:nil queue:[NSOperationQueue mainQueue] usingBlock:^(NSNotification * _Nonnull note) {
+        __strong typeof(weakInputSelf) self = weakInputSelf;
+        if (!self) return;
         [self reloadMousePointerImage];
     }];
 
@@ -1116,12 +1121,16 @@ static UIView *findSDL_uikitview(UIView *root);
 
     [KeyboardInput initKeycodeTable];
     self.mouseConnectCallback = [[NSNotificationCenter defaultCenter] addObserverForName:GCMouseDidConnectNotification object:nil queue:[NSOperationQueue mainQueue] usingBlock:^(NSNotification *note) {
+        __strong typeof(weakInputSelf) self = weakInputSelf;
+        if (!self) return;
         GCMouse* mouse = note.object;
         [self registerMouseCallbacks:mouse];
         self.mousePointerView.hidden = isGrabbing || !virtualMouseEnabled;
         [self setNeedsUpdateOfPrefersPointerLocked];
     }];
     self.mouseDisconnectCallback = [[NSNotificationCenter defaultCenter] addObserverForName:GCMouseDidDisconnectNotification object:nil queue:[NSOperationQueue mainQueue] usingBlock:^(NSNotification *note) {
+        __strong typeof(weakInputSelf) self = weakInputSelf;
+        if (!self) return;
         GCMouse* mouse = note.object;
         mouse.mouseInput.mouseMovedHandler = nil;
         [mouse.mouseInput.auxiliaryButtons makeObjectsPerformSelector:@selector(setPressedChangedHandler:) withObject:nil];
@@ -1131,22 +1140,30 @@ static UIView *findSDL_uikitview(UIView *root);
     if (GCMouse.current != nil) { [self registerMouseCallbacks:GCMouse.current]; }
 
     self.controllerConnectCallback = [[NSNotificationCenter defaultCenter] addObserverForName:GCControllerDidConnectNotification object:nil queue:[NSOperationQueue mainQueue] usingBlock:^(NSNotification *note) {
+        __strong typeof(weakInputSelf) self = weakInputSelf;
+        if (!self) return;
         GCController* controller = note.object;
         [ControllerInput initKeycodeTable];
         [ControllerInput registerControllerCallbacks:controller];
-        self.mousePointerView.hidden = isGrabbing;
-        virtualMouseEnabled = YES;
-        if (getPrefBool(@"control.hardware_hide")) { self.ctrlView.hidden = YES; }
+        [NativeGamepadBridge refresh];
+        if (![ControllerInput isPassthrough]) {
+            self.mousePointerView.hidden = isGrabbing;
+            virtualMouseEnabled = YES;
+            if (getPrefBool(@"control.hardware_hide")) self.ctrlView.hidden = YES;
+        }
     }];
     self.controllerDisconnectCallback = [[NSNotificationCenter defaultCenter] addObserverForName:GCControllerDidDisconnectNotification object:nil queue:[NSOperationQueue mainQueue] usingBlock:^(NSNotification *note) {
+        __strong typeof(weakInputSelf) self = weakInputSelf;
+        if (!self) return;
         GCController* controller = note.object;
         [ControllerInput unregisterControllerCallbacks:controller];
+        [ControllerInput releaseAllInputs];
+        [NativeGamepadBridge refresh];
         if (getPrefBool(@"control.hardware_hide")) { self.ctrlView.hidden = NO; }
     }];
-    if (GCController.controllers.count == 1) {
-        [ControllerInput initKeycodeTable];
-        [ControllerInput registerControllerCallbacks:GCController.controllers.firstObject];
-    }
+    [ControllerInput initKeycodeTable];
+    for (GCController *controller in GCController.controllers) [ControllerInput registerControllerCallbacks:controller];
+    [NativeGamepadBridge refresh];
 
     [self.rootView addSubview:self.inputTextField];
     [self performSelector:@selector(initCategory_LogView)];
@@ -1258,7 +1275,17 @@ static UIView *findSDL_uikitview(UIView *root);
     }
 }
 
+- (void)applyControllerMode {
+    BOOL wasPassthrough = [ControllerInput isPassthrough];
+    [ControllerInput setPassthrough:[[PLProfiles resolveKeyForCurrentProfile:@"controllerMode"] isEqualToString:@"controlify"]];
+    virtualMouseEnabled = ![ControllerInput isPassthrough] && getPrefBool(@"control.virtmouse_enable");
+    if (wasPassthrough && ![ControllerInput isPassthrough] && GCController.controllers.count) virtualMouseEnabled = YES;
+    self.mousePointerView.hidden = isGrabbing || !virtualMouseEnabled;
+    if ([ControllerInput isPassthrough]) self.ctrlView.hidden = NO;
+}
+
 - (void)updatePreferenceChanges {
+    [self applyControllerMode];
     if (getPrefBool(@"debug.debug_auto_correction")) {
         self.inputTextField.autocorrectionType = UITextAutocorrectionTypeDefault;
     } else {
@@ -1271,7 +1298,7 @@ static UIView *findSDL_uikitview(UIView *root);
     [GyroInput updateSensitivity:gyroEnabled?gyroSensitivity:0 invertXAxis:gyroInvertX];
 
     self.mouseSpeed = getPrefFloat(@"control.mouse_speed") / 100.0;
-    virtualMouseEnabled = getPrefBool(@"control.virtmouse_enable");
+    virtualMouseEnabled = ![ControllerInput isPassthrough] && getPrefBool(@"control.virtmouse_enable");
     self.mousePointerView.hidden = isGrabbing || !virtualMouseEnabled;
 
     CGFloat mouseScale = getPrefFloat(@"control.mouse_scale") / 100.0;
@@ -2195,6 +2222,7 @@ static BOOL ame87_mcVersionRequiresTextureBuffer(NSString *mcVersionId) {
                     break;
                 case SPECIALBTN_VIRTUALMOUSE:
                     if (!isGrabbing && !held) {
+                        if ([ControllerInput isPassthrough]) break;
                         virtualMouseEnabled = !virtualMouseEnabled;
                         self.mousePointerView.hidden = !virtualMouseEnabled;
                         setPrefBool(@"control.virtmouse_enable", virtualMouseEnabled);
@@ -2955,6 +2983,7 @@ CALayer *Amethyst_SDL3RenderLayer(void) {
 }
 
 - (void)dealloc {
+    [ControllerInput shutdown];
     // 停止 FPS/内存采样定时器与渲染循环
     [self.statsTimer invalidate];
     self.statsTimer = nil;

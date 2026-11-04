@@ -2,6 +2,7 @@
 #import "LauncherPreferences.h"
 #import "LauncherPreferencesViewController.h"
 #import "PLProfiles.h"
+#import "input/ControllerInput.h"
 #import "SurfaceViewController.h"
 #import "GameMenuOverlayView.h"
 #import "TrackedTextField.h"
@@ -51,7 +52,8 @@ static const void *kMenuDimViewKey = &kMenuDimViewKey;
         @"game.menu.toggle_virtual_mouse",  // 虚拟鼠标开关
         @"game.menu.toggle_keyboard",       // 游戏内键盘
         @"game.menu.resolution",            // 分辨率调整
-        @"Settings"                         // 设置
+        @"Settings",                        // 设置
+        @"controller.mode.title"
     ];
 
     // FCL 风格：菜单从底部弹出，宽度为屏幕宽度的 70%（居中），最大高度为屏幕高度的 60%
@@ -270,6 +272,7 @@ static const void *kMenuDimViewKey = &kMenuDimViewKey;
 
 /// FCL 风格：切换虚拟鼠标（对应 FCL 鼠标分组 / ZL2 ControlMouse）
 - (void)actionToggleVirtualMouse {
+    if ([ControllerInput isPassthrough]) return;
     if (!isGrabbing) {
         virtualMouseEnabled = !virtualMouseEnabled;
         self.mousePointerView.hidden = !virtualMouseEnabled;
@@ -407,6 +410,23 @@ static const void *kMenuDimViewKey = &kMenuDimViewKey;
         case 8: // 分辨率调整
             [self actionAdjustResolution];
             break;
+        case 10: {
+            [self dismissMenu];
+            UIAlertController *alert = [UIAlertController alertControllerWithTitle:localize(@"controller.mode.title", nil)
+                message:localize(@"controller.mode.description", nil) preferredStyle:UIAlertControllerStyleAlert];
+            for (NSString *mode in @[@"native", @"controlify"]) {
+                NSString *key = [mode isEqualToString:@"controlify"] ? @"controller.mode.controlify" : @"controller.mode.native";
+                [alert addAction:[UIAlertAction actionWithTitle:localize(key, nil) style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+                    NSMutableDictionary *profile = [PLProfiles.current.selectedProfile mutableCopy];
+                    profile[@"controllerMode"] = mode;
+                    [PLProfiles.current saveProfile:profile withName:PLProfiles.current.selectedProfileName];
+                    [self applyControllerMode];
+                }]];
+            }
+            [alert addAction:[UIAlertAction actionWithTitle:localize(@"resman.common.cancel", nil) style:UIAlertActionStyleCancel handler:nil]];
+            [self presentViewController:alert animated:YES completion:nil];
+            break;
+        }
         case 9: // 设置
             [self actionOpenPreferences];
             break;

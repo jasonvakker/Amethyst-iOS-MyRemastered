@@ -1986,3 +1986,9 @@
 "update_dialog.update" = "更新";
 "preference.title.auto_check_update" = "启动时检查更新";
 "preference.detail.auto_check_update" = "启动启动器时自动检查 GitHub Releases。每小时最多检查一次，被你选择忽略的版本不会再提示。";
+
+/* Native controller passthrough */
+"controller.mode.title" = "手柄模式";
+"controller.mode.native" = "Air 原生控制";
+"controller.mode.controlify" = "手柄模组直通（Controlify）";
+"controller.mode.description" = "通过 GLFW 向 Controlify 提供模拟手柄输入。触摸控制和启动器菜单仍可使用。适用于 Minecraft 1.21.1。";
