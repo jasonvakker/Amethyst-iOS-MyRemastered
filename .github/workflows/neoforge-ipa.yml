@@ -1,0 +1,68 @@
+name: NeoForge patch IPA
+
+on:
+  push:
+    branches: [feature/neoforge-lwjgl-5.1.0]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-14
+    timeout-minutes: 90
+    steps:
+      - name: Select Xcode 15.4
+        run: sudo xcode-select -s /Applications/Xcode_15.4.app/Contents/Developer
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          submodules: recursive
+        env:
+          GIT_LFS_SKIP_SMUDGE: '1'
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '8'
+      - name: Install build tools
+        run: brew install make ldid
+      - name: Build iOS packages
+        env:
+          IPHONEOS_DEPLOYMENT_TARGET: '14.0'
+          CONFIG_CURSEFORGE_API_KEY: ${{ secrets.CONFIG_CURSEFORGE_API_KEY }}
+        run: |
+          set -o pipefail
+          export PATH=/opt/homebrew/bin:$PATH
+          export SLIMMED=0
+          export BUILD_MOBILEGL=1
+          gmake -j$(sysctl -n hw.ncpu) dsym package PLATFORM=2
+          gmake -j$(sysctl -n hw.ncpu) dsym package PLATFORM=2 TROLLSTORE_JIT_ENT=1
+      - name: Upload IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: Air-5.1.0-NeoForge-IPA
+          path: artifacts/com.air-devs.air-*-ios.ipa
+          if-no-files-found: error
+      - name: Upload TrollStore package
+        uses: actions/upload-artifact@v4
+        with:
+          name: Air-5.1.0-NeoForge-TrollStore
+          path: artifacts/com.air-devs.air-*-ios-trollstore.tipa
+          if-no-files-found: error
+      - name: Upload Java bundles for JPMS verification
+        uses: actions/upload-artifact@v4
+        with:
+          name: Air-Java-bundles
+          path: JavaApp/build/*.jar
+          if-no-files-found: error
+      - name: Upload build diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Air-build-diagnostics
+          path: |
+            mobilegl-build.log
+            Natives/build/sfpew_build.log
+            artifacts/AngelAuraAmethyst.dSYM
+          if-no-files-found: ignore
