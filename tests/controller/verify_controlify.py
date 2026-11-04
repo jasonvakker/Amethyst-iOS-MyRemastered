@@ -14,6 +14,9 @@ mod, jna = map(lambda s: pathlib.Path(s).resolve(), sys.argv[1:3])
 with tempfile.TemporaryDirectory(prefix="air-controlify-loader-") as tmp:
     root = pathlib.Path(tmp)
     with zipfile.ZipFile(mod) as z:
+        debug = z.read("dev/isxander/controlify/debug/DebugProperties.class")
+        if b"controlify.debug.sdl_natives_override" not in debug:
+            sys.exit("UNSUPPORTED: this Controlify version has no SDL override; do not assume GLFW is selected")
         sdl = next(n for n in z.namelist() if n.startswith("META-INF/jarjar/libsdl4j-") and n.endswith(".jar"))
         (root / "libsdl4j.jar").write_bytes(z.read(sdl))
     files = {
