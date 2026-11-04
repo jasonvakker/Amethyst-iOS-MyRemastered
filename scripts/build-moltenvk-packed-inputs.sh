@@ -40,7 +40,7 @@ cp "$PATCHED_LIBRARY" "$DESTINATION"
 install_name_tool -id @rpath/libMoltenVK.dylib "$DESTINATION"
 # App packaging applies its own signature after the install-name change.
 otool -L "$DESTINATION"
-nm -gU "$DESTINATION" | rg ' _vkCreateGraphicsPipelines$'
+nm -gU "$DESTINATION" | grep ' _vkCreateGraphicsPipelines$'
 mkdir -p "$PROJECT_ROOT/artifacts"
 {
     echo 'MoltenVK v1.2.9; SPIRV-Cross 84cdc3b68e5ef5a15ecfacda77c61f24a9080cf9'
