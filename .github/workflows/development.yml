@@ -8,6 +8,7 @@ on:
   push:
     branches-ignore:
       - 'l10n_main'
+      - 'diagnostics/**'
   workflow_dispatch:
 
 jobs:

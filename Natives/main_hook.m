@@ -16,6 +16,7 @@
 #include <time.h>
 #include <unistd.h>
 #include "external/fishhook/fishhook.h"
+#include "ZinkShaderDiagnostics.h"
 
 // 硬件断点异常端口（同步自上游，用于非 TXM 的 iOS 26+ 设备 dlopen 重定向）
 mach_port_t excPort;
@@ -691,6 +692,44 @@ static PFN_zkGetInstanceProcAddr g_real_vkGetInstanceProcAddr = NULL;
 static PFN_zkGetDeviceProcAddr g_real_vkGetDeviceProcAddr = NULL;
 static PFN_zkCreateGraphicsPipelines g_real_vkCreateGraphicsPipelines = NULL;
 
+// Debug-only extra hooks. All arguments/results are forwarded unchanged.
+static _Atomic(PFN_vkCreateShaderModule) ame_sd_real_create_shader;
+static _Atomic(PFN_vkBeginCommandBuffer) ame_sd_real_begin_command;
+static VkResult VKAPI_CALL amethyst_diag_create_shader(VkDevice device,
+    const VkShaderModuleCreateInfo *info, const VkAllocationCallbacks *allocator,
+    VkShaderModule *module) {
+    PFN_vkCreateShaderModule real = atomic_load(&ame_sd_real_create_shader);
+    VkResult result = real(device, info, allocator, module);
+    if (result == VK_SUCCESS) ame_sd_shader(*module, info);
+    return result;
+}
+static VkResult VKAPI_CALL amethyst_diag_begin_command(VkCommandBuffer command,
+    const VkCommandBufferBeginInfo *info) {
+    PFN_vkBeginCommandBuffer real = atomic_load(&ame_sd_real_begin_command);
+    VkResult result = real(command, info);
+    if (result == VK_SUCCESS) ame_sd_begin(command);
+    return result;
+}
+static BOOL amethyst_diag_extra_proc(const char *name) {
+    return ame_sd_enabled() && name &&
+        (!strcmp(name, "vkCreateShaderModule") || !strcmp(name, "vkBeginCommandBuffer"));
+}
+static void *amethyst_diag_resolve(const char *name, void *real) {
+    if (!real) return NULL;
+    if (!strcmp(name, "vkCreateShaderModule")) {
+        atomic_store(&ame_sd_real_create_shader, (PFN_vkCreateShaderModule)real);
+        return (void *)amethyst_diag_create_shader;
+    }
+    atomic_store(&ame_sd_real_begin_command, (PFN_vkBeginCommandBuffer)real);
+    return (void *)amethyst_diag_begin_command;
+}
+
+_Static_assert(sizeof(VkZGraphicsPipelineCreateInfo) == sizeof(VkGraphicsPipelineCreateInfo), "pipeline diagnostic ABI");
+_Static_assert(offsetof(VkZGraphicsPipelineCreateInfo, pVertexInputState) == offsetof(VkGraphicsPipelineCreateInfo, pVertexInputState), "vertex diagnostic ABI");
+_Static_assert(sizeof(VkZPipelineVertexInputStateCreateInfo) == sizeof(VkPipelineVertexInputStateCreateInfo), "vertex input diagnostic ABI");
+_Static_assert(sizeof(VkZVertexInputBindingDescription) == sizeof(VkVertexInputBindingDescription), "binding diagnostic ABI");
+_Static_assert(sizeof(VkZVertexInputAttributeDescription) == sizeof(VkVertexInputAttributeDescription), "attribute diagnostic ABI");
+
 // vkCmd* 真实函数指针（dummy pipeline skip draws 需要）
 static PFN_zkCmdBindPipeline g_real_vkCmdBindPipeline = NULL;
 static PFN_zkCmdDraw g_real_vkCmdDraw = NULL;
@@ -1077,6 +1116,7 @@ static VkZResult amethyst_vkCreateGraphicsPipelines(
     }
     BOOL hasUIntFormat = pipelineCreateInfosHaveUIntFormat(createInfoCount, pCreateInfos);
 
+    uint64_t diagnosticFailure = 0;
     // ===== 策略 1：原始 stride 直接创建 =====
     // 优先尝试原始 stride，保持 stride 与 vertex buffer 数据布局匹配。
     // MoltenVK 1.2.9+ 可能通过 setVertexBuffer:offset:attributeStride:atIndex:
@@ -1090,6 +1130,7 @@ static VkZResult amethyst_vkCreateGraphicsPipelines(
             return result;
         }
         NSLog(@"[ZinkStrideFix] Strategy 1 (original stride) failed: %d", result);
+        diagnosticFailure = ame_sd_failure(createInfoCount, (const VkGraphicsPipelineCreateInfo *)pCreateInfos, result);
         // 清理 pPipelines（失败时 MoltenVK 可能已部分设置）
         for (uint32_t i = 0; i < createInfoCount; i++) pPipelines[i] = NULL;
     }
@@ -1144,6 +1185,8 @@ static VkZResult amethyst_vkCreateGraphicsPipelines(
     for (uint32_t i = 0; i < createInfoCount; i++) {
         if (!pPipelines[i]) {
             pPipelines[i] = allocDummyPipeline();
+            if (diagnosticFailure && diagnosticFailure <= AME_SD_FAILURES) fprintf(stderr, "[ShaderDiag] failure=%llu index=%u dummy=%p\n",
+                (unsigned long long)diagnosticFailure, i, (void *)pPipelines[i]);
             NSLog(@"[ZinkStrideFix] Pipeline %u: allocated dummy handle %p", i, (void*)pPipelines[i]);
         }
     }
@@ -1153,6 +1196,9 @@ static VkZResult amethyst_vkCreateGraphicsPipelines(
 /// vkGetInstanceProcAddr wrapper
 /// 拦截 vkGetDeviceProcAddr、vkCreateGraphicsPipelines、vkCmd* 请求，返回我们的 hook
 static void* amethyst_vkGetInstanceProcAddr(VkZInstance instance, const char* pName) {
+    if (amethyst_diag_extra_proc(pName) && g_real_vkGetInstanceProcAddr) {
+        return amethyst_diag_resolve(pName, g_real_vkGetInstanceProcAddr(instance, pName));
+    }
     if (pName) {
         if (strcmp(pName, "vkGetDeviceProcAddr") == 0) {
             if (!g_real_vkGetDeviceProcAddr && g_real_vkGetInstanceProcAddr) {
@@ -1238,6 +1284,9 @@ static void* amethyst_vkGetInstanceProcAddr(VkZInstance instance, const char* pN
 /// vkGetDeviceProcAddr wrapper
 /// 拦截 vkCreateGraphicsPipelines、vkCmd* 请求，返回我们的 hook
 static void* amethyst_vkGetDeviceProcAddr(VkZDevice device, const char* pName) {
+    if (amethyst_diag_extra_proc(pName) && g_real_vkGetDeviceProcAddr) {
+        return amethyst_diag_resolve(pName, g_real_vkGetDeviceProcAddr(device, pName));
+    }
     if (pName) {
         if (strcmp(pName, "vkCreateGraphicsPipelines") == 0) {
             if (!g_real_vkCreateGraphicsPipelines && g_real_vkGetDeviceProcAddr) {
@@ -1318,6 +1367,7 @@ static void* amethyst_vkGetDeviceProcAddr(VkZDevice device, const char* pName) {
 static void amethyst_vkCmdBindPipeline(VkZCommandBuffer cmd, VkZPipelineBindPoint bp, VkZPipeline pipeline) {
     if (bp == VK_Z_PIPELINE_BIND_POINT_GRAPHICS) {
         g_currentBoundGraphicsPipeline = pipeline;
+        ame_sd_bind((VkCommandBuffer)cmd, (VkPipeline)pipeline);
         if (isDummyPipeline(pipeline)) {
             // Dummy pipeline：跳过实际绑定，避免 MoltenVK 因无效句柄崩溃
             return;
@@ -1330,37 +1380,55 @@ static void amethyst_vkCmdBindPipeline(VkZCommandBuffer cmd, VkZPipelineBindPoin
 
 /// vkCmdDraw hook：当前绑定 dummy pipeline 时跳过绘制
 static void amethyst_vkCmdDraw(VkZCommandBuffer cmd, uint32_t vertexCount, uint32_t instanceCount, uint32_t firstVertex, uint32_t firstInstance) {
-    if (isDummyPipeline(g_currentBoundGraphicsPipeline)) return;
+    if (isDummyPipeline(g_currentBoundGraphicsPipeline)) {
+        ame_sd_skip((VkCommandBuffer)cmd, (VkPipeline)g_currentBoundGraphicsPipeline, "direct");
+        return;
+    }
     if (g_real_vkCmdDraw) g_real_vkCmdDraw(cmd, vertexCount, instanceCount, firstVertex, firstInstance);
 }
 
 /// vkCmdDrawIndexed hook：当前绑定 dummy pipeline 时跳过绘制
 static void amethyst_vkCmdDrawIndexed(VkZCommandBuffer cmd, uint32_t indexCount, uint32_t instanceCount, uint32_t firstIndex, int32_t vertexOffset, uint32_t firstInstance) {
-    if (isDummyPipeline(g_currentBoundGraphicsPipeline)) return;
+    if (isDummyPipeline(g_currentBoundGraphicsPipeline)) {
+        ame_sd_skip((VkCommandBuffer)cmd, (VkPipeline)g_currentBoundGraphicsPipeline, "indexed");
+        return;
+    }
     if (g_real_vkCmdDrawIndexed) g_real_vkCmdDrawIndexed(cmd, indexCount, instanceCount, firstIndex, vertexOffset, firstInstance);
 }
 
 /// vkCmdDrawIndirect hook：当前绑定 dummy pipeline 时跳过绘制
 static void amethyst_vkCmdDrawIndirect(VkZCommandBuffer cmd, uint64_t buffer, uint64_t offset, uint32_t drawCount, uint32_t stride) {
-    if (isDummyPipeline(g_currentBoundGraphicsPipeline)) return;
+    if (isDummyPipeline(g_currentBoundGraphicsPipeline)) {
+        ame_sd_skip((VkCommandBuffer)cmd, (VkPipeline)g_currentBoundGraphicsPipeline, "indirect");
+        return;
+    }
     if (g_real_vkCmdDrawIndirect) g_real_vkCmdDrawIndirect(cmd, buffer, offset, drawCount, stride);
 }
 
 /// vkCmdDrawIndexedIndirect hook：当前绑定 dummy pipeline 时跳过绘制
 static void amethyst_vkCmdDrawIndexedIndirect(VkZCommandBuffer cmd, uint64_t buffer, uint64_t offset, uint32_t drawCount, uint32_t stride) {
-    if (isDummyPipeline(g_currentBoundGraphicsPipeline)) return;
+    if (isDummyPipeline(g_currentBoundGraphicsPipeline)) {
+        ame_sd_skip((VkCommandBuffer)cmd, (VkPipeline)g_currentBoundGraphicsPipeline, "indexed-indirect");
+        return;
+    }
     if (g_real_vkCmdDrawIndexedIndirect) g_real_vkCmdDrawIndexedIndirect(cmd, buffer, offset, drawCount, stride);
 }
 
 /// vkCmdDrawIndirectCount hook：当前绑定 dummy pipeline 时跳过绘制
 static void amethyst_vkCmdDrawIndirectCount(VkZCommandBuffer cmd, uint64_t buffer, uint64_t offset, uint64_t countBuffer, uint64_t countBufferOffset, uint32_t maxDrawCount, uint32_t stride) {
-    if (isDummyPipeline(g_currentBoundGraphicsPipeline)) return;
+    if (isDummyPipeline(g_currentBoundGraphicsPipeline)) {
+        ame_sd_skip((VkCommandBuffer)cmd, (VkPipeline)g_currentBoundGraphicsPipeline, "indirect-count");
+        return;
+    }
     if (g_real_vkCmdDrawIndirectCount) g_real_vkCmdDrawIndirectCount(cmd, buffer, offset, countBuffer, countBufferOffset, maxDrawCount, stride);
 }
 
 /// vkCmdDrawIndexedIndirectCount hook：当前绑定 dummy pipeline 时跳过绘制
 static void amethyst_vkCmdDrawIndexedIndirectCount(VkZCommandBuffer cmd, uint64_t buffer, uint64_t offset, uint64_t countBuffer, uint64_t countBufferOffset, uint32_t maxDrawCount, uint32_t stride) {
-    if (isDummyPipeline(g_currentBoundGraphicsPipeline)) return;
+    if (isDummyPipeline(g_currentBoundGraphicsPipeline)) {
+        ame_sd_skip((VkCommandBuffer)cmd, (VkPipeline)g_currentBoundGraphicsPipeline, "indexed-indirect-count");
+        return;
+    }
     if (g_real_vkCmdDrawIndexedIndirectCount) g_real_vkCmdDrawIndexedIndirectCount(cmd, buffer, offset, countBuffer, countBufferOffset, maxDrawCount, stride);
 }
 

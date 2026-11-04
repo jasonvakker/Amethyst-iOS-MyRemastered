@@ -30,6 +30,7 @@ include_directories(
   "external/fishhook"
   "external/lzma"
   "external/mesa"
+  "external/MobileGL/3rdparty/Vulkan-Headers/include"
   "external/AltKit"
   "external/Apple"
   "external/ballpa1n"
@@ -263,6 +264,11 @@ add_library(audio_capture SHARED
 target_link_libraries(audio_capture
   "-framework AVFoundation"
 )
+
+# Diagnostic artifacts opt in explicitly; normal builds remain off.
+if("$ENV{AMETHYST_SHADER_DIAG_BUILD}" STREQUAL "1")
+  add_definitions(-DAMETHYST_SHADER_DIAG_BUILD=1)
+endif()
 
 # Angel Aura Amethyst
 add_executable(AngelAuraAmethyst

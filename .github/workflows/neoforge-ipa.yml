@@ -2,7 +2,7 @@ name: NeoForge patch IPA
 
 on:
   push:
-    branches: [feature/neoforge-lwjgl-5.1.0, feature/controlify-1.21.1-passthrough]
+    branches: [feature/neoforge-lwjgl-5.1.0, feature/controlify-1.21.1-passthrough, diagnostics/iris-zink-vertex-input]
   workflow_dispatch:
 
 permissions:
@@ -25,6 +25,8 @@ jobs:
         with:
           distribution: zulu
           java-version: '8'
+      - name: Test bounded shader diagnostics
+        run: tests/shaders/run.sh
       - name: Test analog controller bridge
         run: tests/controller/run.sh
       - name: Install build tools
@@ -32,6 +34,7 @@ jobs:
       - name: Build iOS packages
         env:
           IPHONEOS_DEPLOYMENT_TARGET: '14.0'
+          AMETHYST_SHADER_DIAG_BUILD: ${{ startsWith(github.ref_name, 'diagnostics/') && '1' || '0' }}
           CONFIG_CURSEFORGE_API_KEY: ${{ secrets.CONFIG_CURSEFORGE_API_KEY }}
         run: |
           set -o pipefail
@@ -43,7 +46,7 @@ jobs:
       - name: Upload IPA
         uses: actions/upload-artifact@v4
         with:
-          name: Air-5.1.0-NeoForge-IPA
+          name: Air-5.1.0-${{ startsWith(github.ref_name, 'diagnostics/') && 'Shader-Diagnostics' || 'NeoForge' }}-IPA
           path: artifacts/com.air-devs.air-*-ios.ipa
           if-no-files-found: error
       - name: Upload TrollStore package
